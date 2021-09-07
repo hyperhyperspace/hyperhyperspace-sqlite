@@ -1,0 +1,31 @@
+{
+  "name": "@hyper-hyper-space/sqlite",
+  "version": "0.1.0",
+  "description": "SQLite3 backend for Hyper Hyper Space",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "source": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperhyperspace/hyperhyperspace-sqlite.git"
+  },
+  "author": "Santiago Bazerque",
+  "license": "MIT",
+  "private": false,
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "npx tsc",
+    "clean": "rm -rf ./dist/*",
+    "winclean": "if exist dist (rmdir dist /s /q) && mkdir dist"
+  },
+  "devDependencies": {
+    "typescript": "^4.3.5",
+    "@hyper-hyper-space/core": "0.8.0"
+  },
+  "dependencies": {
+    "tslib": "^2.3.1"
+  },
+  "peerDependencies": {
+    "@hyper-hyper-space/core": "0.8.0"
+  }
+}
