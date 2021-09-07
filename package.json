@@ -19,10 +19,12 @@
     "winclean": "if exist dist (rmdir dist /s /q) && mkdir dist"
   },
   "devDependencies": {
-    "typescript": "^4.3.5",
-    "@hyper-hyper-space/core": "0.8.0"
+    "@hyper-hyper-space/core": "0.8.0",
+    "typescript": "^4.3.5"
   },
   "dependencies": {
+    "sqlite": "^4.0.23",
+    "sqlite3": "^5.0.2",
     "tslib": "^2.3.1"
   },
   "peerDependencies": {
