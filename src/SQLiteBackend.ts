@@ -15,7 +15,7 @@ class SQLiteBackend implements Backend {
     static log = new Logger(SQLiteBackend.name, LogLevel.INFO);
     static backendName = 'sqlite';
 
-    static registered: MultiMap<string, SQLiteBackend>;
+    static registered: MultiMap<string, SQLiteBackend> = new MultiMap();
 
     static register(backend: SQLiteBackend) {
         SQLiteBackend.registered.add(backend.filename, backend);
@@ -55,12 +55,9 @@ class SQLiteBackend implements Backend {
                 await db.exec('CREATE TABLE IF NOT EXISTS ' + 
                                   'objects(' + 
                                     'sequence INTEGER PRIMARY KEY AUTOINCREMENT,' + 
-                                    'hash TEXT,' +
+                                    'hash TEXT NOT NULL,' +
                                     'literal TEXT NOT NULL,' +
-                                    'timestamp INTEGER NOT NULL,' + 
-                                    'op_height INTEGER,' +
-                                    'prev_op_count INTEGER,' + 
-                                    'header_hash TEXT' +
+                                    'timestamp INTEGER NOT NULL' + 
                                   ')');
 
                 await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ' +
@@ -68,7 +65,6 @@ class SQLiteBackend implements Backend {
 
                 await db.exec('CREATE TABLE IF NOT EXISTS ' + 
                                 'object_lookup(' +
-                                    'object_hash' +  
                                     'key TEXT,' +
                                     'hash TEXT' + 
                                 ')');
@@ -79,7 +75,7 @@ class SQLiteBackend implements Backend {
                 await db.exec('CREATE TABLE IF NOT EXISTS ' + 
                                 'terminal_ops(' + 
                                     'mutable_object_hash TEXT PRIMARY KEY,' + 
-                                    'terminal_ops TEXT' + 
+                                    'terminal_ops TEXT,' + 
                                     'last_op TEXT' + 
                                 ')');
 
@@ -137,8 +133,10 @@ class SQLiteBackend implements Backend {
 
             if (result === undefined) {
 
-                await db.run('INSERT INTO objects(hash, literal, timestamp, op_height, prev_op_count, header_hash) VALUES (?, ?, ?, ?, ?, ?)',
-                [hash, JSON.stringify(literal), new Date().getTime().toString(), ])
+                console.log('saving ' + hash);
+
+                await db.run('INSERT INTO objects(hash, literal, timestamp) VALUES (?, ?, ?)',
+                [hash, JSON.stringify(literal), new Date().getTime().toString()]);
 
                 const idxEntries = new Array<string>();
 
@@ -173,14 +171,14 @@ class SQLiteBackend implements Backend {
 
                     const prevOpHashes = HashedSet.elementsFromLiteral(LiteralUtils.getFields(literal)['prevOps']).map(HashReference.hashFromLiteral);
 
-                    let terminalOpsRow = await db.get<[string, string]>('SELECT terminal_ops, last_op FROM terminal_ops WHERE mutable_object_hash=?', [mutableHash]);
+                    let terminalOpsResult = await db.get<{terminal_ops: string}>('SELECT terminal_ops FROM terminal_ops WHERE mutable_object_hash=?', [mutableHash]);
 
                     let terminalOps: Array<Hash>;
 
-                    if (terminalOpsRow === undefined) {
+                    if (terminalOpsResult === undefined) {
                         terminalOps = [hash];
                     } else {
-                        terminalOps = JSON.parse(terminalOpsRow[0]);
+                        terminalOps = JSON.parse(terminalOpsResult.terminal_ops);
 
                         for (const hash of prevOpHashes) {
                             let idx = terminalOps.indexOf(hash);
@@ -195,7 +193,7 @@ class SQLiteBackend implements Backend {
                     }
 
                     await db.run('INSERT INTO terminal_ops(mutable_object_hash, terminal_ops, last_op) VALUES (?, ?, ?) ' +
-                                'ON CONFICT(mutable_object_hash) DO UPDATE SET terminal_ops=excluded.terminal_ops, last_op=excluded.last_op',
+                                'ON CONFLICT(mutable_object_hash) DO UPDATE SET terminal_ops=excluded.terminal_ops, last_op=excluded.last_op',
                                 [mutableHash, JSON.stringify(terminalOps), hash]);
 
                 }
@@ -203,9 +201,12 @@ class SQLiteBackend implements Backend {
             }
 
             await db.run('commit');
+
+            await SQLiteBackend.fireCallbacks(this.filename, literal);
     
         } catch (e) {
             await db.run('rollback');
+            throw e;
         }
         
 
@@ -289,9 +290,9 @@ class SQLiteBackend implements Backend {
 
         if (params?.start !== undefined) {
             if (order === 'asc') {
-                startClause = 'AND serial > ? ';
+                startClause = 'AND sequence > ? ';
             } else {
-                startClause = 'AND serial < ? ';
+                startClause = 'AND sequence < ? ';
             }
 
             queryParams.push(Number(params?.start));
@@ -305,7 +306,7 @@ class SQLiteBackend implements Backend {
             queryParams.push(params?.limit);
         }
 
-        const results = await db.all<[{literal: string, serial: number}]>('SELECT literal, serial FROM objects INNER JOIN object_lookup ON objects.hash = object_lookup.hash WHERE key=? ' + startClause + 'ORDER BY serial ' + order + limit, queryParams);
+        const results = await db.all<[{literal: string, sequence: number}]>('SELECT literal, sequence FROM objects INNER JOIN object_lookup ON objects.hash = object_lookup.hash WHERE key=? ' + startClause + 'ORDER BY sequence ' + order + limit, queryParams);
 
         let searchResults = {} as BackendSearchResults;
 
@@ -318,9 +319,9 @@ class SQLiteBackend implements Backend {
             searchResults.items.push(JSON.parse(result.literal));
 
             if (searchResults.start === undefined) {
-                searchResults.start = result.serial + '';
+                searchResults.start = result.sequence + '';
             }
-            searchResults.end = result.serial + '';
+            searchResults.end = result.sequence + '';
         }
 
         return searchResults;
