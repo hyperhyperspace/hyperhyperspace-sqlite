@@ -5,6 +5,9 @@ import { Database, open } from 'sqlite'
 import { Logger, LogLevel } from '@hyper-hyper-space/core/dist/util/logging';
 import { MultiMap } from '@hyper-hyper-space/core/dist/util/multimap';
 
+
+type filename = string;
+
 class SQLiteBackend implements Backend {
 
     static readonly CLASS_KEY = 'class';
@@ -15,42 +18,27 @@ class SQLiteBackend implements Backend {
     static log = new Logger(SQLiteBackend.name, LogLevel.INFO);
     static backendName = 'sqlite';
 
-    static registered: MultiMap<string, SQLiteBackend> = new MultiMap();
+    static activeBackends: MultiMap<filename, SQLiteBackend> = new MultiMap();
+    static alreadyCallbackedObjects: MultiMap<filename, Hash> = new MultiMap();
+    static maxSequenceAlreadyCallbacked: Map<filename, number> = new Map();
+    static intervals: Map<filename, any> = new Map();
+    static databases: Map<filename, Promise<Database<sqlite3.Database, sqlite3.Statement>>> = new Map();
 
     static register(backend: SQLiteBackend) {
-        SQLiteBackend.registered.add(backend.filename, backend);
-    }
 
-    static deregister(backend: SQLiteBackend) {
-        SQLiteBackend.registered.delete(backend.filename, backend);
-    }
+        const originalFilename = backend.filename;
 
-    static getRegisteredInstances(filename: string): Set<SQLiteBackend> {
-        return SQLiteBackend.registered.get(filename);
-    }
-
-    static async fireCallbacks(dbName: string, literal: Literal) {
-        for (const backend of SQLiteBackend.getRegisteredInstances(dbName)) {
-            if (backend.objectStoreCallback !== undefined) {
-                await backend.objectStoreCallback(literal);
-            }
+        if (backend.filename === ':memory:') {
+            backend.filename = backend.filename + Math.random().toString(); 
         }
-    }
 
+        let dbPromise = SQLiteBackend.databases.get(backend.filename);
 
-    filename: string;
-    dbPromise: Promise<Database<sqlite3.Database, sqlite3.Statement>>;
-
-    objectStoreCallback?: (literal: Literal) => Promise<void>
-
-    constructor(filename: string) {
-
-        this.filename = filename;
-
-        this.dbPromise = open({
-            filename: filename,
-            driver: sqlite3.Database
-          }).then(async (db:  Database<sqlite3.Database, sqlite3.Statement>) => {
+        if (dbPromise === undefined) {
+            dbPromise = open({
+                filename: originalFilename,
+                driver: sqlite3.Database
+            }).then(async (db:  Database<sqlite3.Database, sqlite3.Statement>) => {
 
                 await db.exec('CREATE TABLE IF NOT EXISTS ' + 
                                   'objects(' + 
@@ -89,10 +77,96 @@ class SQLiteBackend implements Backend {
                 await db.exec('CREATE INDEX IF NOT EXISTS ' +
                               'op_header_op_hash ON op_headers(op_hash)');
 
-                return db;
-          });
+                let result = await db.get<{max_seq: number}>('SELECT max(sequence) as max_seq FROM objects');
 
-          SQLiteBackend.register(this);
+                if (result !== undefined) {
+                    SQLiteBackend.maxSequenceAlreadyCallbacked.set(backend.filename, result.max_seq);
+                }
+
+                
+                const interval = setInterval(async () => {
+
+                    let query = 'SELECT hash, literal, sequence FROM objects';
+                    let params = [];
+
+                    const max = SQLiteBackend.maxSequenceAlreadyCallbacked.get(backend.filename)
+
+                    if (max === undefined) {
+                        query = query + ' WHERE sequence > ?'
+                        params.push(max);
+                    }
+
+                    query = query + ' ORDER BY sequence ASC';
+
+                    const results = await db.all<[{hash: Hash, literal: string, sequence: number}]>(query, params);
+
+                    for (const result of results) {
+                        const literal = JSON.parse(result.literal);
+                        if (!SQLiteBackend.alreadyCallbackedObjects.has(backend.filename, result.hash)) {
+                            SQLiteBackend.fireCallbacks(backend.filename, literal);
+                        } else {
+                            SQLiteBackend.alreadyCallbackedObjects.delete(backend.filename, result.hash);
+                        }
+                    }
+
+                }, 500);
+
+                SQLiteBackend.intervals.set(backend.filename, interval);
+
+                return db;
+            });
+
+            SQLiteBackend.databases.set(backend.filename, dbPromise);
+        }
+
+        SQLiteBackend.activeBackends.add(backend.filename, backend);
+    }
+
+    static deregister(backend: SQLiteBackend) {
+        SQLiteBackend.activeBackends.delete(backend.filename, backend);
+
+        if (SQLiteBackend.activeBackends.get(backend.filename).size === 0) {
+            const interval = SQLiteBackend.intervals.get(backend.filename);
+            if (interval !== undefined) {
+                clearInterval(interval);
+            }
+
+            const dbPromise = SQLiteBackend.databases.get(backend.filename);
+            SQLiteBackend.databases.delete(backend.filename);
+
+            SQLiteBackend.maxSequenceAlreadyCallbacked.delete(backend.filename);
+            SQLiteBackend.alreadyCallbackedObjects.deleteKey(backend.filename);
+
+            dbPromise?.then((db: Database) => db.close());
+        }
+    }
+
+    static getRegisteredInstances(filename: filename): Set<SQLiteBackend> {
+        return SQLiteBackend.activeBackends.get(filename);
+    }
+
+    static async fireCallbacks(dbName: string, literal: Literal) {
+
+        for (const backend of SQLiteBackend.getRegisteredInstances(dbName)) {
+            if (backend.objectStoreCallback !== undefined) {
+                await backend.objectStoreCallback(literal);
+            }
+        }
+    }
+
+
+    filename: string;
+    dbPromise: Promise<Database<sqlite3.Database, sqlite3.Statement>>;
+
+    objectStoreCallback?: (literal: Literal) => Promise<void>
+
+    constructor(filename: string) {
+
+        this.filename = filename;
+        
+        SQLiteBackend.register(this);
+
+        this.dbPromise = SQLiteBackend.databases.get(this.filename) as Promise<Database<sqlite3.Database, sqlite3.Statement>>;
         
     }
 
@@ -109,6 +183,9 @@ class SQLiteBackend implements Backend {
 
         let tries = 0
         let transaction = false;
+
+        let saved = true;
+        let removeImmediateIfRollback = false;
 
         try {
             do {
@@ -133,7 +210,8 @@ class SQLiteBackend implements Backend {
 
             if (result === undefined) {
 
-                console.log('saving ' + hash);
+                SQLiteBackend.alreadyCallbackedObjects.add(this.filename, hash);
+                removeImmediateIfRollback = true;
 
                 await db.run('INSERT INTO objects(hash, literal, timestamp) VALUES (?, ?, ?)',
                 [hash, JSON.stringify(literal), new Date().getTime().toString()]);
@@ -201,15 +279,19 @@ class SQLiteBackend implements Backend {
             }
 
             await db.run('commit');
-
-            await SQLiteBackend.fireCallbacks(this.filename, literal);
     
         } catch (e) {
+            saved = false;
+            if (removeImmediateIfRollback) {
+                SQLiteBackend.alreadyCallbackedObjects.delete(this.filename, literal.hash);
+            }
             await db.run('rollback');
             throw e;
         }
-        
 
+        if (saved) {
+            await SQLiteBackend.fireCallbacks(this.filename, literal);
+        }
         
     }
 
@@ -255,12 +337,12 @@ class SQLiteBackend implements Backend {
     async loadTerminalOpsForMutable(hash: string): Promise<{ lastOp: string; terminalOps: string[]; } | undefined> {
         let db = await this.dbPromise;
 
-        let result = await db.get<{terminal_ops: string}>('SELECT terminal_ops FROM terminal_ops WHERE mutable_object_hash=?', [hash]);
+        let result = await db.get<{terminal_ops: string, last_op: string}>('SELECT terminal_ops FROM terminal_ops WHERE mutable_object_hash=?', [hash]);
 
         if (result === undefined) {
             return undefined;
         } else {
-            return JSON.parse(result.terminal_ops);
+            return {terminalOps: JSON.parse(result.terminal_ops), lastOp: result.last_op};
         }
     }
 
@@ -329,7 +411,8 @@ class SQLiteBackend implements Backend {
     }
 
     close(): void {
-        this.dbPromise.then((db:Database) => { db.close(); SQLiteBackend.deregister(this);} );
+
+        SQLiteBackend.deregister(this);
     }
 
     setStoredObjectCallback(objectStoreCallback: (literal: Literal) => Promise<void>): void {
