@@ -1,5 +1,6 @@
 export { SQLiteBackend } from './SQLiteBackend';
 /*
+
 import { HashedLiteral, MutableSet, Store } from '@hyper-hyper-space/core';
 import { SQLiteBackend } from './SQLiteBackend';
 
@@ -14,7 +15,6 @@ const main = async () => {
     let mut = new MutableSet<HashedLiteral>();
 
     await store.save(mut);
-
 
     let mut2 = await store2.load(mut.hash()) as MutableSet<HashedLiteral>;
 
