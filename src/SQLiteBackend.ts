@@ -195,7 +195,7 @@ class SQLiteBackend implements Backend {
                                     let query = 'SELECT hash, literal, sequence FROM objects';
                                     let params = [];
             
-                                    const max = dbMonitor?.alreadyCallbackedMaxSeq;
+                                    const max = dbMonitor.alreadyCallbackedMaxSeq;
             
                                     if (max !== undefined) {
                                         query = query + ' WHERE sequence > ?'
@@ -217,7 +217,10 @@ class SQLiteBackend implements Backend {
                                             } else {
                                                 alreadyCallbackedObjects.delete(result.hash);
                                             }
+
+                                            dbMonitor.alreadyCallbackedMaxSeq = result.sequence;
                                         }
+                                        
                                         
                                     } catch (e: any) {
                                         if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
@@ -292,6 +295,7 @@ class SQLiteBackend implements Backend {
     filename?: string;
     memoryDbId?: string;
     dbPromise: Promise<Database<sqlite3.Database, sqlite3.Statement>>;
+    writeLock: Lock;
 
     objectStoreCallback?: (literal: Literal) => Promise<void>
 
@@ -303,7 +307,9 @@ class SQLiteBackend implements Backend {
         } else {
             this.filename = filename;
             this.dbPromise = SQLiteBackend.registerDbMonitorFor(this).then(() => SQLiteBackend.open(filename));
-        }        
+        }
+
+        this.writeLock = new Lock();
     }
 
     getBackendName(): string {
@@ -327,123 +333,129 @@ class SQLiteBackend implements Backend {
         do {
 
             count = count + 1;
-            try {
-                await db.run('begin immediate');
 
-                const hash = literal.hash;
+            if (this.writeLock.acquire()) {
+                try {
 
-                let result = await db.get<{hash: Hash}>('SELECT hash FROM objects WHERE hash=?', [hash]);
-    
-                if (result === undefined) {
-                    
-                    if (this.filename !== undefined) {
-                        SQLiteBackend.dbMonitors.get(this.filename)?.alreadyCallbackedObjects.add(hash);
-                        removeImmediateIfRollback = true;
-                    }
-                    
-                    
-    
-                    await db.run('INSERT INTO objects(hash, literal, timestamp) VALUES (?, ?, ?)',
-                    [hash, JSON.stringify(literal), new Date().getTime().toString()]);
-    
-                    const idxEntries = new Array<string>();
-    
-                    SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.CLASS_KEY, literal.value._class);
-    
-                    for (const dep of literal.dependencies) {
-                        let reference = dep.path + '#' + dep.hash;
-                        SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.REFERENCES_KEY, reference);
-                        let referencingClass = dep.className + '.' + dep.path + '#' + dep.hash;
-                        SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.REFERENCING_CLASS_KEY, referencingClass);
-                    }
-    
-                    // caveat: if two different objects with the same hash (or more likely something in the stored process changes)
-                    //         are saved, the first one may leave some ghost idxEntries. We're not going to address that here.
-    
-                    for (const key of idxEntries) {
-                        await db.run('INSERT INTO object_lookup(key, hash) VALUES (?, ?)', [key, hash]);
-                    }
-    
-                    const isOp = literal.value['_flags'].indexOf('op') >= 0;
-    
-                    if (isOp) {
-                        if (opHeader === undefined) {
-                            throw new Error('Missing causal history received by backend while trying to store op ' + literal.hash);
+                    await db.run('begin immediate');
+
+                    const hash = literal.hash;
+
+                    let result = await db.get<{hash: Hash}>('SELECT hash FROM objects WHERE hash=?', [hash]);
+        
+                    if (result === undefined) {
+                        
+                        if (this.filename !== undefined) {
+                            SQLiteBackend.dbMonitors.get(this.filename)?.alreadyCallbackedObjects.add(hash);
+                            removeImmediateIfRollback = true;
                         }
-    
-                        await db.run('INSERT INTO op_headers(header_hash, op_hash, literal) VALUES (?, ?, ?) ' +
-                                    'ON CONFLICT(header_hash) DO UPDATE SET op_hash=excluded.op_hash, literal=excluded.literal',
-                                    [opHeader.literal.headerHash, hash, JSON.stringify(opHeader.literal)]);
-    
-                        const mutableHash = LiteralUtils.getFields(literal)['targetObject']['_hash'];
-    
-                        const prevOpHashes = HashedSet.elementsFromLiteral(LiteralUtils.getFields(literal)['prevOps']).map(HashReference.hashFromLiteral);
-    
-                        let terminalOpsResult = await db.get<{terminal_ops: string}>('SELECT terminal_ops FROM terminal_ops WHERE mutable_object_hash=?', [mutableHash]);
-    
-                        let terminalOps: Array<Hash>;
-    
-                        if (terminalOpsResult === undefined) {
-                            terminalOps = [hash];
-                        } else {
-                            terminalOps = JSON.parse(terminalOpsResult.terminal_ops);
-    
-                            for (const hash of prevOpHashes) {
-                                let idx = terminalOps.indexOf(hash);
-                                if (idx >= 0) {
-                                    terminalOps.splice(idx, 1);
+                        
+                        
+        
+                        await db.run('INSERT INTO objects(hash, literal, timestamp) VALUES (?, ?, ?)',
+                        [hash, JSON.stringify(literal), new Date().getTime().toString()]);
+        
+                        const idxEntries = new Array<string>();
+        
+                        SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.CLASS_KEY, literal.value._class);
+        
+                        for (const dep of literal.dependencies) {
+                            let reference = dep.path + '#' + dep.hash;
+                            SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.REFERENCES_KEY, reference);
+                            let referencingClass = dep.className + '.' + dep.path + '#' + dep.hash;
+                            SQLiteBackend.addIdxEntry(idxEntries, SQLiteBackend.REFERENCING_CLASS_KEY, referencingClass);
+                        }
+        
+                        // caveat: if two different objects with the same hash (or more likely something in the stored process changes)
+                        //         are saved, the first one may leave some ghost idxEntries. We're not going to address that here.
+        
+                        for (const key of idxEntries) {
+                            await db.run('INSERT INTO object_lookup(key, hash) VALUES (?, ?)', [key, hash]);
+                        }
+        
+                        const isOp = literal.value['_flags'].indexOf('op') >= 0;
+        
+                        if (isOp) {
+                            if (opHeader === undefined) {
+                                throw new Error('Missing causal history received by backend while trying to store op ' + literal.hash);
+                            }
+        
+                            await db.run('INSERT INTO op_headers(header_hash, op_hash, literal) VALUES (?, ?, ?) ' +
+                                        'ON CONFLICT(header_hash) DO UPDATE SET op_hash=excluded.op_hash, literal=excluded.literal',
+                                        [opHeader.literal.headerHash, hash, JSON.stringify(opHeader.literal)]);
+        
+                            const mutableHash = LiteralUtils.getFields(literal)['targetObject']['_hash'];
+        
+                            const prevOpHashes = HashedSet.elementsFromLiteral(LiteralUtils.getFields(literal)['prevOps']).map(HashReference.hashFromLiteral);
+        
+                            let terminalOpsResult = await db.get<{terminal_ops: string}>('SELECT terminal_ops FROM terminal_ops WHERE mutable_object_hash=?', [mutableHash]);
+        
+                            let terminalOps: Array<Hash>;
+        
+                            if (terminalOpsResult === undefined) {
+                                terminalOps = [hash];
+                            } else {
+                                terminalOps = JSON.parse(terminalOpsResult.terminal_ops);
+        
+                                for (const hash of prevOpHashes) {
+                                    let idx = terminalOps.indexOf(hash);
+                                    if (idx >= 0) {
+                                        terminalOps.splice(idx, 1);
+                                    }
+                                }
+                
+                                if (terminalOps.indexOf(hash) < 0) { // this should always be true
+                                    terminalOps.push(hash);
                                 }
                             }
-            
-                            if (terminalOps.indexOf(hash) < 0) { // this should always be true
-                                terminalOps.push(hash);
-                            }
+        
+                            await db.run('INSERT INTO terminal_ops(mutable_object_hash, terminal_ops, last_op) VALUES (?, ?, ?) ' +
+                                        'ON CONFLICT(mutable_object_hash) DO UPDATE SET terminal_ops=excluded.terminal_ops, last_op=excluded.last_op',
+                                        [mutableHash, JSON.stringify(terminalOps), hash]);
+        
                         }
-    
-                        await db.run('INSERT INTO terminal_ops(mutable_object_hash, terminal_ops, last_op) VALUES (?, ?, ?) ' +
-                                    'ON CONFLICT(mutable_object_hash) DO UPDATE SET terminal_ops=excluded.terminal_ops, last_op=excluded.last_op',
-                                    [mutableHash, JSON.stringify(terminalOps), hash]);
-    
+        
                     }
-    
-                }
-    
-                await db.run('commit');
+        
+                    await db.run('commit');
 
-                if (this.filename !== undefined) {
-                    await SQLiteBackend.fireCallbacks(this.filename, literal);
-                } else if (this.objectStoreCallback !== undefined) {
-                    await this.objectStoreCallback(literal);
-                }
-                
+                    done = true;
+                } catch (e: any) {
 
-                done = true;
-            } catch (e: any) {
+                    if (removeImmediateIfRollback && this.filename !== undefined) {
+                        SQLiteBackend.dbMonitors.get(this.filename)?.alreadyCallbackedObjects.delete(literal.hash);
+                    }
 
-                if (removeImmediateIfRollback && this.filename !== undefined) {
-                    SQLiteBackend.dbMonitors.get(this.filename)?.alreadyCallbackedObjects.delete(literal.hash);
-                }
+                    try {
+                        await db.run('rollback');
+                    } catch (e) {
 
-                try {
-                    await db.run('rollback');
-                } catch (e) {
-
+                    }
+        
+                    if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
+                        await new Promise(r => setTimeout(r, 500));
+                    } else {
+                        console.log('store lock')
+                        console.log(e);
+                        throw e;
+                    }
+                } finally {
+                    this.writeLock.release();
                 }
-    
-                if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                    await new Promise(r => setTimeout(r, 500));
-                } else {
-                    console.log('store lock')
-                    console.log(e);
-                    throw e;
-                }
+            } else {
+                await new Promise(r => setTimeout(r, 500));
             }
-
             if (count % 10 === 0) {
                 console.log('WARN: waited for 5 seconds (store) on SQLite database ' + this.filename);
             }
     
         } while (!done)
+
+        if (this.filename !== undefined) {
+            await SQLiteBackend.fireCallbacks(this.filename, literal);
+        } else if (this.objectStoreCallback !== undefined) {
+            await this.objectStoreCallback(literal);
+        }
         
     }
 
@@ -587,7 +599,7 @@ class SQLiteBackend implements Backend {
                 run = true;
             } catch (e: any) {
                 if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                    await new Promise(r => setTimeout(r, 250));   
+                    await new Promise(r => setTimeout(r, 250));
                 } else {
                     console.log('get')
                     console.log(e);
