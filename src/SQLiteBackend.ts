@@ -52,6 +52,12 @@ class SQLiteBackend implements Backend {
                 count = count + 1;
 
                 try {
+
+                    
+                    await db.run('PRAGMA read_uncommitted = 1');
+                    await db.run('PRAGMA journal_mode = WAL');
+                    await db.run('PRAGMA synchronous = OFF');
+
                     await db.run('begin immediate');
                     
                     await db.exec('CREATE TABLE IF NOT EXISTS ' + 
@@ -104,7 +110,7 @@ class SQLiteBackend implements Backend {
                     }
                     
                     if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                        await new Promise(r => setTimeout(r, 500));
+                        await new Promise(r => setTimeout(r, 25));
                     } else {
                         console.log('init work')
                         console.log(e);
@@ -113,8 +119,8 @@ class SQLiteBackend implements Backend {
                     }
                 }
 
-                if (count % 10 === 0) {
-                    console.log('WARN: waited for 5 seconds (init tx) on SQLite database ' + filename);
+                if (count % 100 === 0) {
+                    console.log('WARN: waited for 2.5 seconds (init tx) on SQLite database ' + filename);
                 }
         
             } while (!done);
@@ -161,7 +167,7 @@ class SQLiteBackend implements Backend {
 
                             } catch (e: any) {
                                 if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                                    await new Promise(r => setTimeout(r, 500));
+                                    await new Promise(r => setTimeout(r, 25));
                                 } else {
                                     console.log('max sequence lookup')
                                     console.log(e);
@@ -170,8 +176,8 @@ class SQLiteBackend implements Backend {
                                 }
                             }
 
-                            if (count % 10 === 0) {
-                                console.log('WARN: waited for 5 seconds (max sequence lookup) on SQLite database ' + backend.filename);
+                            if (count % 100 === 0) {
+                                console.log('WARN: waited for 2.5 seconds (max sequence lookup) on SQLite database ' + backend.filename);
                             }
                         
                         } while (!done);
@@ -349,9 +355,7 @@ class SQLiteBackend implements Backend {
                             SQLiteBackend.dbMonitors.get(this.filename)?.alreadyCallbackedObjects.add(hash);
                             removeImmediateIfRollback = true;
                         }
-                        
-                        
-        
+
                         await db.run('INSERT INTO objects(hash, literal, timestamp) VALUES (?, ?, ?)',
                         [hash, JSON.stringify(literal), new Date().getTime().toString()]);
         
@@ -433,9 +437,9 @@ class SQLiteBackend implements Backend {
                     }
         
                     if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                        await new Promise(r => setTimeout(r, 500));
+                        await new Promise(r => setTimeout(r, 25));                   
                     } else {
-                        console.log('store lock')
+                        console.log('SQLite store error!')
                         console.log(e);
                         throw e;
                     }
@@ -443,9 +447,9 @@ class SQLiteBackend implements Backend {
                     this.writeLock.release();
                 }
             } else {
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 50));
             }
-            if (count % 10 === 0) {
+            if (count % 100 === 0) {
                 console.log('WARN: waited for 5 seconds (store) on SQLite database ' + this.filename);
             }
     
@@ -599,7 +603,7 @@ class SQLiteBackend implements Backend {
                 run = true;
             } catch (e: any) {
                 if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                    await new Promise(r => setTimeout(r, 250));
+                    await new Promise(r => setTimeout(r, 25));
                 } else {
                     console.log('get')
                     console.log(e);
@@ -608,7 +612,7 @@ class SQLiteBackend implements Backend {
                 }
             }
 
-            if (count % 20 === 0) {
+            if (count % 200 === 0) {
                 console.log('WARN: waited for 5 seconds (get) on SQLite database ' + this.filename);
             }
         }
@@ -632,7 +636,7 @@ class SQLiteBackend implements Backend {
                 result = await db.all<T>(q, params);
             } catch (e: any) {
                 if (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
-                    await new Promise(r => setTimeout(r, 250));   
+                    await new Promise(r => setTimeout(r, 25));   
                 } else {
                     console.log('all')
                     console.log(e);
@@ -641,7 +645,7 @@ class SQLiteBackend implements Backend {
                 }
             }
 
-            if (count % 20 === 0) {
+            if (count % 200 === 0) {
                 console.log('WARN: waited for 5 seconds on (read all) SQLite database ' + this.filename);
             }
         }
