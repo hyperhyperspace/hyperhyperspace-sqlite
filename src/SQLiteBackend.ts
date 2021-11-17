@@ -34,7 +34,7 @@ class SQLiteBackend implements Backend {
     static intervals: Map<filename, any> = new Map();
     static databases: Map<filename, Promise<Database<sqlite3.Database, sqlite3.Statement>>> = new Map();*/
 
-    static open(filename: filename): Promise<Database<sqlite3.Database, sqlite3.Statement>> {
+    static open(filename: filename, fast: boolean): Promise<Database<sqlite3.Database, sqlite3.Statement>> {
 
         let dbPromise: Promise<Database<sqlite3.Database, sqlite3.Statement>>;
 
@@ -53,11 +53,12 @@ class SQLiteBackend implements Backend {
 
                 try {
 
+                    if (fast) {
+                        await db.run('PRAGMA read_uncommitted = 1');
+                        await db.run('PRAGMA journal_mode = WAL');
+                        await db.run('PRAGMA synchronous = OFF');    
+                    }
                     
-                    await db.run('PRAGMA read_uncommitted = 1');
-                    await db.run('PRAGMA journal_mode = WAL');
-                    await db.run('PRAGMA synchronous = OFF');
-
                     await db.run('begin immediate');
                     
                     await db.exec('CREATE TABLE IF NOT EXISTS ' + 
@@ -132,7 +133,7 @@ class SQLiteBackend implements Backend {
         
     }
 
-    static registerDbMonitorFor(backend: SQLiteBackend): Promise<void> {
+    static registerDbMonitorFor(backend: SQLiteBackend, fast: boolean): Promise<void> {
 
         const filename = backend.filename as filename;
 
@@ -140,7 +141,7 @@ class SQLiteBackend implements Backend {
 
         if (dbMonitor === undefined) {
         
-            const dbPromise = SQLiteBackend.open(filename).then(async (db: Database<sqlite3.Database, sqlite3.Statement>) => {
+            const dbPromise = SQLiteBackend.open(filename, fast).then(async (db: Database<sqlite3.Database, sqlite3.Statement>) => {
                     
                         let done = false;
 
@@ -303,19 +304,22 @@ class SQLiteBackend implements Backend {
     dbPromise: Promise<Database<sqlite3.Database, sqlite3.Statement>>;
     writeLock: Lock;
 
+    fast: boolean;
+
     objectStoreCallback?: (literal: Literal) => Promise<void>
 
-    constructor(filename: string) {
+    constructor(filename: string, fast=false) {
 
         if (filename === ':memory:') {
             this.memoryDbId = new RNGImpl().randomHexString(128);
-            this.dbPromise = SQLiteBackend.open(filename);
+            this.dbPromise = SQLiteBackend.open(filename, fast);
         } else {
             this.filename = filename;
-            this.dbPromise = SQLiteBackend.registerDbMonitorFor(this).then(() => SQLiteBackend.open(filename));
+            this.dbPromise = SQLiteBackend.registerDbMonitorFor(this, fast).then(() => SQLiteBackend.open(filename, fast));
         }
 
         this.writeLock = new Lock();
+        this.fast = fast;
     }
 
     getBackendName(): string {
