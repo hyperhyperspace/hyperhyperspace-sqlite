@@ -53,9 +53,10 @@ class SQLiteBackend implements Backend {
 
                 try {
 
+                    await db.run('PRAGMA journal_mode = WAL');
+
                     if (fast) {
                         await db.run('PRAGMA read_uncommitted = 1');
-                        await db.run('PRAGMA journal_mode = WAL');
                         await db.run('PRAGMA synchronous = OFF');    
                     }
                     
