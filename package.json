@@ -16,11 +16,16 @@
   "scripts": {
     "build": "npx tsc",
     "clean": "rm -rf ./dist/*",
-    "winclean": "if exist dist (rmdir dist /s /q) && mkdir dist"
+    "winclean": "if exist dist (rmdir dist /s /q) && mkdir dist",
+    "test": "npx jest"
   },
   "devDependencies": {
     "@hyper-hyper-space/core": "0.9.0",
-    "typescript": "^4.3.5"
+    "@hyper-hyper-space/node-env": "0.11.0",
+    "typescript": "^4.3.5",
+    "@types/jest": "^26.0.19",
+    "jest": "^26.6.3",
+    "ts-jest": "^26.4.4"
   },
   "dependencies": {
     "sqlite": "^4.0.23",
@@ -29,5 +34,23 @@
   },
   "peerDependencies": {
     "@hyper-hyper-space/core": "0.9.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "jsdom",
+    "verbose": true,
+    "modulePaths": [
+      "<rootDir>/test",
+      "<rootDir>/src",
+      "<rootDir>/node_modules/**"
+    ],
+    "roots": [
+      "./test"
+    ],
+    "globals": {
+      "ts-jest": {
+        "tsconfig": "tsconfig.json"
+      }
+    }
   }
 }
