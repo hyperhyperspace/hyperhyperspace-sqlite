@@ -43,8 +43,9 @@ class PermissionedFeatureSet extends AbstractFeatureSet {
 
         for (const validEnableOpHash of this._validEnableOpsPerFeature.get(featureName).values()) {
             const validEnableOp = this._allValidEnableOps.get(validEnableOpHash);
-            const disableOp = new DisableFeatureAfterOp(validEnableOp, this._terminalOps.values());
+            const disableOp = new DisableFeatureAfterOp(validEnableOp);
             disableOp.setAuthor(admin);
+            this.setCurrentPrevOps(disableOp);
             disableOp.setPrevOps(this._terminalOps.values());
             const useOp = this.getUsers().useCapabilityForOpIfAvailable(admin, 'admin', disableOp);
             if (useOp !== undefined) {
