@@ -1,6 +1,6 @@
 import { TestPeerSource } from './TestPeerSource';
 
-import { AgentPod, MeshProxy } from '@hyper-hyper-space/core';
+import { AgentPod, MeshProxy, SecretBasedPeerSource } from '@hyper-hyper-space/core';
 
 import { PeerInfo, PeerGroupAgent } from '@hyper-hyper-space/core';
 import { ObjectDiscoveryPeerSource } from '@hyper-hyper-space/core';
@@ -16,9 +16,15 @@ import { Mesh } from '@hyper-hyper-space/core';
 
 class TestPeerGroupPods {
     
-    static async generate(peerGroupId: string, activePeers: number, totalPeers: number, peerConnCount: number, network: 'wrtc'|'ws'|'mix' = 'wrtc', discovery:'linkup-discovery'|'no-discovery', basePort?: number): Promise<Array<AgentPod>> {
+    static async generate(peerGroupId: string, activePeers: number, totalPeers: number, peerConnCount: number, network: 'wrtc'|'ws'|'mix' = 'wrtc', discovery:'linkup-discovery'|'linkup-discovery-secret'|'no-discovery', basePort?: number): Promise<Array<AgentPod>> {
 
         let peers = new Array<PeerInfo>();
+
+        let secret: string|undefined = undefined;
+
+        if (discovery === 'linkup-discovery-secret') {
+            secret = new RNGImpl().randomHexString(256);
+        }
 
         for (let i=0; i<totalPeers; i++) {
             let id = Identity.fromKeyPair({'id':'peer' + i}, await RSAKeyPair.generate(1024));
@@ -34,6 +40,10 @@ class TestPeerGroupPods {
                 identity: id,
                 identityHash: id.hash()
             };
+
+            if (discovery === 'linkup-discovery-secret') {
+                peer.endpoint = SecretBasedPeerSource.maskEndpoint(peer.endpoint, secret);
+            }
 
             peers.push(peer);
         }
@@ -57,7 +67,7 @@ class TestPeerGroupPods {
 
             let params: any = { maxPeers: peerConnCount, minPeers: peerConnCount, tickInterval: 1.5, peerConnectionAttemptInterval: 15, peerConnectionTimeout: 14 };
 
-            if (discovery === 'linkup-discovery') {
+            if (discovery === 'linkup-discovery' || discovery === 'linkup-discovery-secret') {
 
                 params.tickInterval = 1; // speed up peer group management to make up for peer discovery
 
@@ -67,6 +77,10 @@ class TestPeerGroupPods {
                 meshClient.startObjectBroadcast(object, [LinkupManager.defaultLinkupServer], [peers[i].endpoint]);
 
                 peerSourceToUse = new ObjectDiscoveryPeerSource(mesh, object, [LinkupManager.defaultLinkupServer], peers[i].endpoint, (ep: string) => peerSource.getPeerForEndpoint(ep));
+
+                if (discovery === 'linkup-discovery-secret') {
+                    peerSourceToUse = new SecretBasedPeerSource(peerSourceToUse, secret);
+                }
             }
 
             let peerGroupAgent = new PeerGroupAgent(peerGroupId, peers[i], peerSourceToUse, params);

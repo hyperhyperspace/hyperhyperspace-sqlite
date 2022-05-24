@@ -74,7 +74,7 @@ async function testBasicUndoCycle(store: Store) {
     await permissions.addUser(temporaryUserId, adminId);
     await store.save(permissions);
 
-    permissions.watchForChanges(true);
+    permissions.watchForChanges();
 
     expect(permissions.isUser(userId));
     expect(permissions.isUser(temporaryUserId));
@@ -121,13 +121,13 @@ async function testMultiObjectUndoCascade(store: Store) {
     const permissionsClone = await store.load(permissions.hash()) as PermissionTest;
     await permissionsClone.loadAllChanges();
 
-    permissions.watchForChanges(true);
+    permissions.watchForChanges();
 
     const features = new PermissionedFeatureSet(permissions);
 
     await store.save(features);
 
-    features.watchForChanges(true);
+    features.watchForChanges();
 
     const useFeatureOpFail = features.useFeatureIfEnabled('anon-read', 'sample-usage-key');
 
