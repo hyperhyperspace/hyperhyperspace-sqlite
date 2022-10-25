@@ -5,6 +5,7 @@ import { Database, open } from 'sqlite'
 import { Logger, LogLevel } from '@hyper-hyper-space/core/dist/util/logging';
 import { MultiMap } from '@hyper-hyper-space/core/dist/util/multimap';
 import { Lock } from '@hyper-hyper-space/core/dist/util/concurrency';
+import { Storable } from '@hyper-hyper-space/core/dist/storage/backends/Backend';
 
 type filename = string;
 
@@ -468,14 +469,14 @@ class SQLiteBackend implements Backend {
         
     }
 
-    async load(hash: string): Promise<Literal | undefined> {
+    async load(hash: string): Promise<Storable | undefined> {
 
-        let result = await this.dbGetWithWaiting<{literal: string}>('SELECT literal FROM objects WHERE hash=?', [hash]);
+        let result = await this.dbGetWithWaiting<{literal: string, sequence: number}>('SELECT literal, sequence FROM objects WHERE hash=?', [hash]);
 
         if (result === undefined) {
             return undefined;
         } else {
-            return JSON.parse(result.literal);
+            return {literal: JSON.parse(result.literal), sequence: result.sequence};
         }
     }
 
