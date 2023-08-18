@@ -1,4 +1,4 @@
-import { Backend, BackendSearchParams, BackendSearchResults, Hash, HashedSet, HashReference, Literal, LiteralUtils, RNGImpl, StoredOpHeader } from '@hyper-hyper-space/core';
+import { Backend, BackendSearchParams, BackendSearchResults, Hash, HashedSet, HashReference, Literal, LiteralUtils, RNGImpl, StateCheckpoint, Store, StoredOpHeader } from '@hyper-hyper-space/core';
 
 import sqlite3 from 'sqlite3'
 import { Database, open } from 'sqlite'
@@ -322,6 +322,18 @@ class SQLiteBackend implements Backend {
 
         this.writeLock = new Lock();
         this.fast = fast;
+    }
+    getURL(): string {
+        return this.getBackendName() + '://' + this.getName();
+    }
+    storeCheckpoint(_checkpoint: StateCheckpoint): Promise<void> {
+        throw new Error('Method not implemented.');
+    }
+    loadLastCheckpoint(_mutableObject: string): Promise<StateCheckpoint | undefined> {
+        throw new Error('Method not implemented.');
+    }
+    loadLastCheckpointMeta(_mutableObject: string): Promise<StateCheckpoint | undefined> {
+        throw new Error('Method not implemented.');
     }
 
     getBackendName(): string {
@@ -660,6 +672,20 @@ class SQLiteBackend implements Backend {
     }
 
 }
+
+Store.registerBackend(SQLiteBackend.backendName, (url: string) => { 
+    
+    const parts = url.split('://');
+
+    if (parts[0] !== SQLiteBackend.backendName) {
+        throw new Error('Trying to open this backend url "' + url + '" using SQLiteBackend, but only URLs starting with ' + SQLiteBackend.backendName + ':// are supported.');
+    }
+
+    const dbName = parts.slice(1).join('://');
+
+    return new SQLiteBackend(dbName);
+});
+
 
 export { SQLiteBackend };
 
